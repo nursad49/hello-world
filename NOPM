@@ -1,0 +1,168 @@
+function score=NOPM(A,B,MN,VH,moment_type,K_p)
+
+%Prediction of Speech Intelligibility Using a Neurogram Orthogonal Polynomial Measure (NOPM)
+%
+% Simple use: score=NOPM(A,B);% calculate NOMP scores between two neurograms.
+% The neurogram is the frequency-time neural responses. It is an array of size L1 by L2,
+% where L1 is the number CF and L2 is the legnth in time.
+% Reference: Mamun, N., Jassim, W. A., & Zilany, M. S. (2015). 
+            %Prediction of speech intelligibility using a neurogram orthogonal polynomial measure (NOPM).
+            %IEEE/ACM Transactions on Audio, Speech, and Language Processing, 23(4), 760-773.
+% Inputs:
+%     A:             L1 by L2 array of original neurogram.
+%     B:             L1 by L2 array of distorted neurogram.
+%     MN:            A two-element vector [M N] specifying the size of block for block procressing. (default:[4 4])
+%     VH:            A two-element vector [V H] specifying the amount of border pixels to add to each block.
+%                    The function adds V rows above and below each block and H columns left and right of each block.
+%                    The size of each resulting block will be: [M + 2*V, N + 2*H].
+%                    [M + 2*V, N + 2*H] must be a SQUARE array!
+%     moment_type:   To define the type of orthogonal moments: 'T' or 'K'
+%                    'T' is the Tchebichef orthogonal moments
+%                    'K' is the Krawtchouk orthogonal moments. (default: 'K')
+%     K_p:           The ROI parameter. Its ONLY for the case of Krawtchouk moments, 'K'.
+
+% Outputs:    score    The intelligibility score (0 to 1) between original and distorted neurograms.
+
+%%
+if nargin<2
+    fprintf('Usage: score=NOPM(A,B) \n');
+    fprintf('where A is the L1 by L2 original neurogram \n');
+    fprintf(' and  B is the L1 by L2 disported neurogram\n\n');
+    return;
+end;
+if nargin<3
+    M=4; N=4;
+    MN=[M,N];
+end
+if nargin<4
+    M=MN(1,1);
+    N=MN(1,2);
+    V=M/2;
+    H=N/2;
+    VH=[V,H];
+end
+if nargin<5
+    M=MN(1,1);N=MN(1,2);
+    V=VH(1,1);H=VH(1,2);
+    moment_type='K';
+    K_p=0.9;
+end
+if nargin<6
+    M=MN(1,1);N=MN(1,2);
+    V=VH(1,1);H=VH(1,2);
+    if moment_type=='K'
+        K_p=0.9;
+    end
+end
+% check the size of each neurogram
+if ~isequal(size(A),size(B))
+    error('Two neurograms must have same size.');
+end
+% check the size of block
+if (M+2*V)~=(N+2*H) || mod(M+2*V,2)==1 || mod(N+2*H,2)==1
+    error('Block size: [M+2*V,N+2*H] must be even and square array. Ex: 4 by 4, 8 by 8, and so on');
+end
+%%
+global all_blocks item
+
+% orthogonal polynomials
+if moment_type=='T'
+    polynomial=Tchebichef(M+2*V,N+2*H);
+else
+    polynomial=krawtchouk(M+2*V,K_p,N+2*H);
+end
+
+item=0; all_blocks=[];
+xF_org=apply_moments(A,polynomial,MN,VH);
+all_blocks_moments_org=all_blocks;
+
+item=0; all_blocks=[];
+xF_denoised=apply_moments(B,polynomial,MN,VH);
+all_blocks_moments_dist=all_blocks;
+
+neurogram_moments_reference=[];
+neurogram_moments_test=[];
+
+for i=1:length(all_blocks_moments_org)
+    neurogram_moments_reference=[neurogram_moments_reference;all_blocks_moments_org{i}];
+    neurogram_moments_test=[neurogram_moments_test;all_blocks_moments_dist{i}];
+end
+score=corr2(neurogram_moments_reference,neurogram_moments_test);
+end
+
+function xFeatures=apply_moments(neurogram,polynomial,MN,VH)
+fun = @(block_struct) block_processing(block_struct.data,polynomial);
+xFeatures = blockproc(neurogram,MN,fun,'BorderSize',VH,'TrimBorder',true,'PadPartialBlocks',true,'UseParallel',true);
+end
+function blk_moments= block_processing(in_array,polynomial)
+global all_blocks item
+blk_moments=polynomial*in_array*polynomial';
+[r1 r2]=size(blk_moments);
+item=item+1;
+all_blocks{item}=blk_moments(((r1/2)-(r1/4))+1: end-(r1/4),:);
+
+end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+function T = Tchebichef(N, Ord)
+% To calculate discrete orthogonal Tchebichef polynomials in X-direction
+% based on some computational aspects of discret orthonormal moments,
+% R. Mukundan, 2004
+% N is the size of the signal.
+% Ord is the order of polynomials. 1<=Ord<=N
+% N-must be even number! not ODD.
+% By Dr. Wissam A. Jassim,
+% wissam@um.edu.my
+T = double(zeros(Ord,N));
+T(0+1,0+1)=double(1.0/sqrt(N));
+for n=1:Ord-1
+    T(n+1,0+1)= -1.0*(double(sqrt((N-n)/(N+n)))*double(sqrt((2*n+1.0)/(2*n-1.0))))*T(n,0+1);
+end
+for n=0:Ord-1
+    T(n+1,1+1)= (1.0+double((n*(1.0+n))/(1.0-N)))*T(n+1,0+1);
+end
+for x = 2:(N/2)-1
+    for n=0:Ord-1
+        b1= double(-n*(n+1.0)-(2*x-1)*(x-N-1.0)-x);
+        lamda1=double(b1/(x*(N-x)));
+        lamda2=double(((x-1.0)*(x-N-1.0))/(x*(N-x)));
+        T(n+1,x+1)=lamda1*T(n+1,x)+lamda2*T(n+1,x-1);
+    end
+end
+for x=(N/2):N-1
+    for n=0:Ord-1
+        T(n+1,x+1)= (T(n+1,N-1-x+1))/((-1)^n);
+    end
+end
+end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+function krawtchouk = krawtchouk(N,p, Ord)
+% To calculate discrete orthogonal Krawtchouck polynomials in X-direction
+% N is the size of the signal.
+% Ord is the order of polynomials. 1<=Ord<=N
+% p is a paramemter 0< p < 1
+% N- nust be even number! not ODD.
+% By Dr. Wissam A. Jassim,
+% wissam@um.edu.my
+K = double(zeros(N,N));
+K(0+1,0+1)=sqrt((1.0-p)^(N-1.0));
+K(0+1,1+1)=sqrt(((N-1.0)*p)/(1.0-p))*K(0+1,0+1);
+for n=1:Ord-1
+    K(n+1,0+1)= sqrt(((p*(N-n))/(n*(1.0-p))))*K(n,0+1);
+    K(n+1,1+1)=((-n+p*(N-1.0))/(p*(N-1)))*sqrt(((N-1.0)*p)/(1.0-p))*K(n+1,0+1);
+end
+for x=1:(N/2)-2
+    for n=0:N-1
+        A=(p*(N-1.0-x))/sqrt((p*(N-1.0-x))/((1-p)*(x+1)));
+        B=-1.0*n+p*(N-1.0-x)+x*(1.0-p);
+        C=(x*(1.0-p))/sqrt((x*(1.0-p))/(p*(N-x)));
+        K(n+1,x+1+1)=(B/A)*K(n+1,x+1)-(C/A)*K(n+1,x);
+        
+    end
+end
+for x=(N/2):N-1
+    for n=0:N-1
+        K(n+1,x+1)= (-1)^(n+x-1)*K(N-n-1+1,N-x-1+1);
+    end
+end
+krawtchouk=K(1:Ord,1:N);
+end
